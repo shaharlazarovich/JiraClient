@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useEffect, useState } from "react";
+import Pagination from "./pagination"; 
 
 const styles = {
   google: `
@@ -281,22 +282,27 @@ const themes = {
 
   const tableStyles = `
   table {
-    width: 100%;
-    border-collapse: collapse;
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: auto; /* Automatically adjust column widths */
   }
-  th, td {
+
+    th, td {
     border: 1px solid #ddd;
     padding: 10px;
     text-align: left;
-  }
-  th {
+    word-break: break-word; /* Break long words for better display */
+    }
+
+    th {
     background-color: #f4f4f4;
     font-weight: bold;
-  }
-  tr:nth-child(even) {
+    }
+
+    tr:nth-child(even) {
     background-color: #f9f9f9;
-  }
-`;
+    }
+    `;
 
 const Register = () => {
     const [formData, setFormData] = useState({
@@ -305,36 +311,31 @@ const Register = () => {
       jiraToken: "",
     });
     const [issues, setIssues] = useState([]);
+    const [initialLoad, setInitialLoad] = useState(true); // New state to track initial page load
     const [theme, setTheme] = useState("google");
     const [source, setSource] = useState("jira"); // Tracks the source of the data
-  
+    const [currentPage, setCurrentPage] = useState(1);
+    const [totalPages, setTotalPages] = useState(1);
+    const [isFormSubmitted, setIsFormSubmitted] = useState(false); // Track if the form has been submitted
+    const [loading, setLoading] = useState(false);
+    const [errorMessage, setErrorMessage] = useState<string | null>(null);
+    const tableRef = useRef<HTMLTableElement | null>(null);
+    
     const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
       const { name, value } = e.target;
       setFormData({ ...formData, [name]: value });
     };
-  
-    const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
-      e.preventDefault();
-      try {
-        const response = await fetch("http://localhost:5001/jira/getissues", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(formData),
-        });
-        if (!response.ok) {
-          throw new Error("Failed to fetch issues");
-        }
-        const data = await response.json();
-        setIssues(data);
-        setSource("jira"); // Mark as fetched from Jira
-      } catch (error) {
-        alert(error instanceof Error ? error.message : "Unknown error");
-      }
-    };
 
-    const handleSubmit2 = async (e: React.FormEvent<HTMLFormElement>) => {
+    const pageSize = 10; // Number of issues per page
+    
+
+    const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+        setInitialLoad(false); // User has interacted
+        setSource("jira"); // Set source to Jira
         e.preventDefault();
         try {
+            setLoading(true);
+            setErrorMessage(null);
             const response = await fetch("http://localhost:5001/jira/fetchandsaveissues", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -342,30 +343,113 @@ const Register = () => {
             });
     
             if (!response.ok) {
-                throw new Error("Failed to fetch and save issues");
+                throw new Error(await response.text());
             }
     
             const data = await response.json();
-            setIssues(data); // Display fetched issues on the screen.
-            setSource("jira"); // Mark as fetched from DB
-        } catch (error) {
-            alert(error instanceof Error ? error.message : "Unknown error");
-        }
+            setIssues(data.issues); // Set the issues from the response
+            setCurrentPage(data.currentPage || 1);
+            setTotalPages(data.totalPages || 1);
+          } catch (error: unknown) {
+            if (error instanceof Error) {
+              setErrorMessage(error.message);
+            } else {
+              setErrorMessage("An unexpected error occurred.");
+            }
+          } finally {
+            setLoading(false);
+          }
     };
-  
-    const handleFetchIssuesFromDb = async () => {
-      try {
-        const response = await fetch("http://localhost:5001/jira/getissuesfromdb");
+
+    const fetchIssues = async (page: number, pageSize: number) => {
+        const response = await fetch(
+            `/api/issues?page=${page}&pageSize=${pageSize}`
+        );
+    
         if (!response.ok) {
-          throw new Error("Failed to fetch issues from database");
+            const errorText = await response.text();
+            throw new Error(`Failed to fetch issues: ${errorText}`);
         }
-        const data = await response.json();
-        setIssues(data);
-        setSource("db"); // Mark as fetched from DB
-      } catch (error) {
-        alert(error instanceof Error ? error.message : "Unknown error");
-      }
+    
+        try {
+            return await response.json();
+        } catch (error) {
+            throw new Error("Failed to parse JSON response from the server.");
+        }
     };
+    
+
+      const loadIssues = async () => {
+        try {
+          const data = await fetchIssues(currentPage, pageSize);
+          setIssues(data.issues);
+          setTotalPages(data.totalPages);
+        } catch (error) {
+          console.error("Error fetching issues:", error);
+        }
+      };
+
+      useEffect(() => {
+        if (isFormSubmitted) {
+          loadIssues(); // Only load issues if the form has been submitted
+        }
+      }, [currentPage, isFormSubmitted]);
+
+      useEffect(() => {
+        if (tableRef.current) {
+            const table = tableRef.current;
+            const colWidths: number[] = [];
+    
+            // Calculate the max width for each column
+            Array.from(table.rows).forEach((row) => {
+                Array.from(row.cells).forEach((cell, index) => {
+                    const width = cell.offsetWidth;
+                    colWidths[index] = Math.max(colWidths[index] || 0, width);
+                });
+            });
+    
+            // Apply the widths to the header cells
+            Array.from(table.rows[0].cells).forEach((cell, index) => {
+                cell.style.minWidth = `${colWidths[index]}px`;
+            });
+        }
+    }, [issues, currentPage]);
+    
+
+      const handlePageChange = async (newPage: number) => {
+        if (newPage >= 1 && newPage <= totalPages) {
+          if (source === "db") {
+            await handleFetchIssuesFromDb(newPage, 10);
+          } else if (source === "jira") {
+            setCurrentPage(newPage); // For now, pagination from Jira is not yet supported
+          }
+        }
+      };
+      
+      const handleFetchIssuesFromDb = async (page: number = 1, pageSize: number = 10) => {
+        try {
+          setInitialLoad(false); // User has interacted
+          setSource("db"); // Set source to Database
+          setLoading(true);
+          setErrorMessage(null);
+          const response = await fetch(`http://localhost:5001/jira/getissuesfromdb?page=${currentPage}&pageSize=${pageSize}`);
+
+          if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`Failed to fetch: ${errorText}`);
+          }
+      
+          const data = await response.json();
+          setIssues(data.issues);
+          setCurrentPage(page);
+          setTotalPages(data.totalPages || 1);
+        } catch (error) {
+          setErrorMessage((error as Error).message);
+        } finally {
+          setLoading(false);
+        }
+      };
+      
     
     return (
         <div>
@@ -383,9 +467,15 @@ const Register = () => {
             LinkedIn
           </button>
         </div>
+        
         <div className="form-wrapper">
           <h1>Register</h1>
-          <form onSubmit={handleSubmit2}>
+          {initialLoad && (
+            <div>
+                <p>Welcome! Please enter details to fetch issues.</p>
+            </div>
+            )}
+          <form onSubmit={handleSubmit}>
             <input
               type="text"
               name="jiraUrl"
@@ -409,34 +499,71 @@ const Register = () => {
             />
             <button type="submit">Submit</button>
           </form>
-          <button onClick={handleFetchIssuesFromDb} className="db-fetch-btn">
-            Fetch Issues from Database
-          </button>
+          {loading && (
+            <div style={{ marginTop: '20px', textAlign: 'center', color: '#555' }}>
+                Loading...
+            </div>
+            )}
+            {errorMessage && (
+            <div style={{ marginTop: '10px', color: 'red' }}>{errorMessage}</div>
+            )}
+         <button
+        onClick={() => {
+            handleFetchIssuesFromDb();
+        }}
+        className="db-fetch-btn"
+        >
+        Fetch Issues from Database
+        </button>
         </div>
-        {issues.length > 0 && (
-            <div style={source === "jira" ? themes.jira : themes.db}>
-           <h2>
-             Issues {source === "jira" ? "from Jira" : "from Database"}
-           </h2> 
-            <table>
-              <thead>
+        {!initialLoad && Array.isArray(issues) && issues.length > 0 && (    
+        <div style={source === "jira" ? themes.jira : themes.db}>
+            <h2>
+            Issues {source === "jira" ? "from Jira" : "from Database"}
+            </h2> 
+            {/* Pagination at the top */}
+            <Pagination 
+            currentPage={currentPage} 
+            totalPages={totalPages} 
+            onPageChange={handlePageChange} 
+            />
+
+            <table ref={tableRef}>
+            <thead>
                 <tr>
-                  {Object.keys(issues[0]).map((key) => (
+                {Object.keys(issues[0]).map((key) => (
                     <th key={key}>{key}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {issues.map((issue: any, index) => (
-                  <tr key={index}>
-                    {Object.keys(issue).map((key) => (
-                      <td key={key}>{JSON.stringify(issue[key])}</td>
-                    ))}
-                  </tr>
                 ))}
-              </tbody>
+                </tr>
+            </thead>
+            <tbody>
+                {issues.map((issue: any, index) => (
+                <tr key={index}>
+                    {Object.keys(issue).map((key) => (
+                    <td key={key}>{JSON.stringify(issue[key])}</td>
+                    ))}
+                </tr>
+                ))}
+            </tbody>
             </table>
-          </div>
+            {/* Pagination at the bottom */}
+            <Pagination 
+            currentPage={currentPage} 
+            totalPages={totalPages} 
+            onPageChange={handlePageChange} 
+            />
+        </div>
+        )}
+
+        {!initialLoad && (!Array.isArray(issues) || issues.length === 0) && (
+        <div>
+            <h2>No Issues to Display</h2>
+            {source === "jira" ? (
+            <p>No issues found in Jira. Try refreshing or modifying your query.</p>
+            ) : source === "db" ? (
+            <p>No issues found in the database. Ensure data is saved correctly.</p>
+            ) : null}
+        </div>
         )}
       </div>
     );
