@@ -1,0 +1,45 @@
+.issues-wrapper {
+    background-color: #e6f7ff; /* Light blue background */
+    border-radius: 10px;
+    padding: 20px;
+    width: 90%;
+    max-width: 800px;
+    box-shadow: 0px 4px 6px rgba(0, 0, 0, 0.1); /* Subtle shadow */
+    margin: 20px auto;
+  }
+  
+  .issues-wrapper h2 {
+    text-align: center;
+    margin-bottom: 20px;
+    color: #0056b3; /* Dark blue text color */
+  }
+  
+  .issues-wrapper table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: auto;
+  }
+  
+  .issues-wrapper th {
+    background-color: #007bff; /* Blue background for headers */
+    color: #ffffff; /* White text */
+    font-weight: bold;
+    padding: 10px;
+    text-align: left;
+  }
+  
+  .issues-wrapper td {
+    border: 1px solid #b3d8ff; /* Light blue borders */
+    padding: 10px;
+    text-align: left;
+    color: #003366; /* Darker blue for text */
+  }
+  
+  .issues-wrapper tr:nth-child(even) {
+    background-color: #cceeff; /* Lighter blue for even rows */
+  }
+  
+  .issues-wrapper tr:nth-child(odd) {
+    background-color: #e6f7ff; /* Slightly darker blue for odd rows */
+  }
+  
