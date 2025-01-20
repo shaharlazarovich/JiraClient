@@ -1,8 +1,8 @@
 interface BatchData {
-    type: 'issues' | 'histories';
+    type: 'issues' | 'histories'| 'users';
     items: BatchItem[];
     totalProcessed: number;
     batchNumber: number;
-    startTime?: Date;  // Add these
-    endTime?: Date;    // timing fields
+    startTime?: Date; 
+    endTime?: Date;   
   }

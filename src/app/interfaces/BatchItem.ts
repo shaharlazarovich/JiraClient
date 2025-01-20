@@ -5,4 +5,7 @@ interface BatchItem {
     field?: string;
     changedBy?: string;
     changedAt?: string;
+    name?: string;
+    email?: string;
+    accountId?: string;
   }

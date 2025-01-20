@@ -3,34 +3,9 @@ import { useEffect, useState, useCallback } from 'react';
 import { HttpTransportType, HubConnection, HubConnectionBuilder, HubConnectionState, LogLevel } from '@microsoft/signalr';
 import "../styles/loader.css";
 
-interface BatchItem {
-  key?: string;
-  summary?: string;
-  status?: string;
-  field?: string;
-  changedBy?: string;
-  changedAt?: string;
-}
-
-interface BatchData {
-  type: 'issues' | 'histories';
-  items: BatchItem[];
-  totalProcessed: number;
-  batchNumber: number;
-}
-
-interface FetchSummary {
-  issues: number;
-  histories: number;
-}
-
-interface LoaderComponentProps {
-  onMessage: (message: string, type: 'success' | 'error') => void;
-}
-
 const LoaderComponent: React.FC<LoaderComponentProps> = ({ onMessage }) => {
   const [currentBatch, setCurrentBatch] = useState<BatchData | null>(null);
-  const [totalCounts, setTotalCounts] = useState<FetchSummary>({ issues: 0, histories: 0 });
+  const [totalCounts, setTotalCounts] = useState<FetchSummary>({ users: 0, issues: 0, histories: 0 });
   const [connection, setConnection] = useState<HubConnection | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<string>('Disconnected');
   const [isComplete, setIsComplete] = useState(false);
@@ -49,18 +24,14 @@ const LoaderComponent: React.FC<LoaderComponentProps> = ({ onMessage }) => {
         .withAutomaticReconnect({
           nextRetryDelayInMilliseconds: (retryContext) => {
             if (retryContext.previousRetryCount === 0) {
-              return 0; // First retry immediately
+              return 0;
             }
-            
-            const baseDelay = 1000; // Start with 1 second
-            const maxDelay = 30000; // Max 30 seconds between retries
-            
-            // Exponential backoff with a max delay
+            const baseDelay = 1000;
+            const maxDelay = 30000;
             const delay = Math.min(
               maxDelay,
               baseDelay * Math.pow(2, retryContext.previousRetryCount - 1)
             );
-            
             console.log(`Connection retry attempt ${retryContext.previousRetryCount}. Next retry in ${delay}ms`);
             return delay;
           }
@@ -68,6 +39,7 @@ const LoaderComponent: React.FC<LoaderComponentProps> = ({ onMessage }) => {
         .configureLogging(LogLevel.Information)
         .build();
 
+      // Connection event handlers
       newConnection.onclose((error) => {
         console.log('Connection closed:', error);
         setConnectionStatus('Disconnected');
@@ -83,11 +55,12 @@ const LoaderComponent: React.FC<LoaderComponentProps> = ({ onMessage }) => {
         setConnectionStatus('Connected');
       });
 
-      newConnection.on("ReceiveBatchUpdate", (type: 'issues' | 'histories', data: any) => {
+      // Message handlers
+      newConnection.on("ReceiveBatchUpdate", (type: 'issues' | 'histories' | 'users', data: any) => {
         console.log(`Received ${type} batch update:`, data);
         
         requestAnimationFrame(() => {
-          const batchSize = type === 'issues' ? 30 : 50;
+          const batchSize = type === 'issues' ? 30 : type === 'users' ? 50 : 40;
           const batchNumber = Math.floor(data.totalProcessed / batchSize);
           
           setCurrentBatch({
@@ -109,17 +82,19 @@ const LoaderComponent: React.FC<LoaderComponentProps> = ({ onMessage }) => {
         setTotalCounts(summary);
         setIsComplete(true);
         setShowLoader(false);
-        
+        const usersCount = summary.users ?? 0;
+        const issuesCount = summary.issues ?? 0;
+        const historiesCount = summary.histories ?? 0;
         onMessage(
-          `Successfully fetched ${summary.issues} Issues and ${summary.histories} Issue Histories from Jira`,
+          `Successfully fetched ${usersCount} Users, ${issuesCount} Issues and ${historiesCount} Issue Histories from Jira`,
           "success"
         );
       });
 
-      // Add error handling for the connection itself
       newConnection.on("error", (error: Error) => {
         console.error("Connection error:", error);
-        // Don't fail completely, let automatic reconnection handle it
+        setConnectionError(`Connection error: ${error.message}`);
+        onMessage(`Connection error: ${error.message}`, 'error');
       });
 
       console.log('Connection created with enhanced retry policy');
@@ -132,6 +107,7 @@ const LoaderComponent: React.FC<LoaderComponentProps> = ({ onMessage }) => {
     }
   }, [onMessage]);
 
+  // Initialize SignalR connection
   useEffect(() => {
     createConnection();
     return () => {
@@ -143,26 +119,101 @@ const LoaderComponent: React.FC<LoaderComponentProps> = ({ onMessage }) => {
     };
   }, [createConnection]);
 
+  // Start connection and initiate fetch
+  // Update the useEffect that handles connection and fetching
   useEffect(() => {
-    if (connection) {
-      const startConnection = async () => {
+    const startConnectionAndFetch = async () => {
+      if (connection && connection.state === HubConnectionState.Disconnected) {
         try {
-          if (connection.state === HubConnectionState.Disconnected) {
-            await connection.start();
-            console.log('SignalR Connection started');
-            setConnectionStatus('Connected');
+          await connection.start();
+          console.log('SignalR Connection started');
+          setConnectionStatus('Connected');
+  
+          const credentialsString = localStorage.getItem('jiraCredentials');
+          console.log('Retrieved credentials string:', credentialsString ? 'exists' : 'null');
+          
+          if (!credentialsString) {
+            throw new Error('No credentials found in localStorage');
           }
+  
+          let credentials;
+          try {
+            credentials = JSON.parse(credentialsString);
+            console.log('Parsed credentials:', {
+              hasBaseUrl: !!credentials.baseUrl,
+              hasUsername: !!credentials.username,
+              hasToken: !!credentials.token,
+              baseUrlValue: credentials.baseUrl // let's see the actual value
+            });
+          } catch (e) {
+            console.error('Error parsing credentials:', e);
+            throw new Error('Invalid credentials format in localStorage');
+          }
+  
+          // Validate credentials
+          if (!credentials.baseUrl || !credentials.username || !credentials.token) {
+            console.error('Missing credentials:', {
+              baseUrl: !credentials.baseUrl,
+              username: !credentials.username,
+              token: !credentials.token
+            });
+            throw new Error('Missing required credentials');
+          }
+  
+          const requestBody = {
+            baseUrl: credentials.baseUrl,
+            username: credentials.username,
+            token: credentials.token
+          };
+  
+          console.log('Sending request with body:', {
+            baseUrl: requestBody.baseUrl,
+            username: requestBody.username,
+            hasToken: !!requestBody.token
+          });
+  
+          const response = await fetch("http://localhost:5001/api/fetch/fetch-all", {
+            method: "POST",
+            headers: { 
+              "Content-Type": "application/json",
+              "Accept": "application/json"
+            },
+            body: JSON.stringify(requestBody)
+          });
+  
+          const responseText = await response.text();
+          console.log('Raw response:', responseText);
+  
+          let responseData;
+          try {
+            responseData = JSON.parse(responseText);
+          } catch (e) {
+            console.error('Error parsing response:', e);
+            throw new Error(`Invalid response format: ${responseText}`);
+          }
+  
+          if (!response.ok || !responseData.success) {
+            throw new Error(responseData.message || `HTTP error! status: ${response.status}`);
+          }
+  
+          console.log('Fetch process initiated successfully');
+  
         } catch (error) {
-          console.error('Error starting connection:', error);
+          console.error('Error in connection/fetch:', error);
           setConnectionStatus('Error');
-          setConnectionError(`Failed to connect: ${error}`);
-          onMessage(`Failed to establish connection: ${error}`, 'error');
+          setConnectionError(error instanceof Error ? error.message : 'Unknown error occurred');
+          onMessage(error instanceof Error ? error.message : 'Unknown error occurred', 'error');
+          setShowLoader(false);
         }
-      };
-
-      startConnection();
+      }
+    };
+  
+    if (connection) {
+      console.log('Connection state:', connection.state);
+      startConnectionAndFetch();
     }
   }, [connection, onMessage]);
+
 
   if (!showLoader) {
     return null;
@@ -194,7 +245,7 @@ const LoaderComponent: React.FC<LoaderComponentProps> = ({ onMessage }) => {
   return (
     <div className="loader-container">
       <div className="loader-content">
-        <h2>Fetching {currentBatch.type === 'issues' ? 'Issues' : 'Issue History'}</h2>
+        <h2>Fetching {currentBatch.type}</h2>
         <div className="progress-info">
           <p>Processing Batch #{currentBatch.batchNumber}</p>
           <p>Total {currentBatch.type} Processed: {currentBatch.totalProcessed}</p>
@@ -204,7 +255,13 @@ const LoaderComponent: React.FC<LoaderComponentProps> = ({ onMessage }) => {
           <div className="batch-header">Current Batch Items:</div>
           {currentBatch.items.slice(0, 5).map((item, index) => (
             <div key={index} className="batch-item">
-              {currentBatch.type === 'issues' ? (
+              {currentBatch.type === 'users' ? (
+                <>
+                  {item.name && <span className="field">Name: {item.name}</span>}
+                  {item.email && <span className="field">Email: {item.email}</span>}
+                  {item.accountId && <span className="field">Account ID: {item.accountId}</span>}
+                </>
+              ) : currentBatch.type === 'issues' ? (
                 <>
                   {item.key && <span className="field">Key: {item.key}</span>}
                   {item.summary && <span className="field">Summary: {item.summary}</span>}
